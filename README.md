@@ -4,7 +4,8 @@ Projeto em Python para conectar ao **MetaTrader 5** e rodar um Expert Advisor co
 
 1. **Estratégia** Dual EMA + stops ATR  
 2. **Gestão de risco** (sizing, filtros, limites)  
-3. **Execução** separada (dry-run por padrão — sem ordens reais)
+3. **Execução** separada (dry-run por padrão — sem ordens reais)  
+4. **Backtest offline** (CSV / sintético; MT5 opcional)
 
 ## Requisitos
 
@@ -152,6 +153,35 @@ Após `pip install -e .`:
 mt5-ea --once -v
 ```
 
+## Backtest offline
+
+O motor em `mt5_ea.backtest` replay OHLC com a **mesma** Dual EMA + ATR e o RiskManager do EA ao vivo (sizing, max posições, etc.). Não precisa de terminal MT5.
+
+Modelagem:
+
+1. Sinal no **fechamento** da barra (com barra “em formação” sintética, como no live)
+2. Entrada/saída por sinal no **open da barra seguinte** (com spread)
+3. SL/TP checados no high/low das barras seguintes (se ambos na mesma barra, assume SL primeiro)
+
+```bash
+# Demo com dados sintéticos (padrão)
+python -m mt5_ea.backtest --synthetic --bars 500
+
+# CSV local (colunas: time,open,high,low,close[,volume])
+python -m mt5_ea.backtest --csv tests/fixtures/ohlc_eurusd_m15.csv
+
+# Fixture de exemplo do repositório
+python -m mt5_ea.backtest --csv tests/fixtures/ohlc_eurusd_m15.csv --lots 0.10 --trades
+
+# Parâmetros de estratégia / sizing %
+python -m mt5_ea.backtest --synthetic --ema-fast 8 --ema-slow 21 --atr-sl 1.5 --atr-tp 2.5 --risk-percent 0.5
+
+# Opcional: histórico real do MT5 (Windows + .env)
+python -m mt5_ea.backtest --mt5 --symbol EURUSD --timeframe 15 --bars 1000
+```
+
+Métricas impressas: lucro líquido, win rate, max drawdown, profit factor, nº de trades e resumo da curva de equity.
+
 ## Estrutura
 
 ```
@@ -163,8 +193,13 @@ src/mt5_ea/
   risk.py          # filtros + sizing → TradeDecision
   execution.py     # TradeDecision → dry-run / MT5
   ea.py            # loop do EA
-  __main__.py
-tests/             # unitários sem terminal MT5
+  backtest/        # motor offline + CLI
+    data.py        # CSV / sintético / MT5 opcional
+    engine.py      # replay OHLC
+    metrics.py     # lucro, DD, PF, equity curve
+    __main__.py    # python -m mt5_ea.backtest
+tests/
+  fixtures/        # OHLC de exemplo para CI
 ```
 
 ## Testes (sem MetaTrader)
@@ -179,6 +214,7 @@ PYTHONPATH=src pytest -q
 - `MT5_DRY_RUN=true` por padrão; `--live` é explícito e loga aviso.
 - Use conta **demo** enquanto calibra EMA/ATR/risco.
 - Não coloque senhas no código nem no Git — apenas em `.env` local.
+- Backtest é simulação: resultados passados não garantem performance futura.
 
 ## Licença / uso
 

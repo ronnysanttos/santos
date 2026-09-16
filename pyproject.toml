@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 mt5-ea = "mt5_ea.ea:main"
+mt5-backtest = "mt5_ea.backtest.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
