@@ -142,25 +142,47 @@ def load_mt5_history(
     *,
     timeframe_minutes: int = 15,
     bars: int = 500,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
     settings: Any | None = None,
 ) -> list[Bar]:
     """
-    Busca histórico no terminal MT5 (opcional).
+    Busca histórico no terminal MT5 via copy_rates_from_pos / copy_rates_range.
 
-    Requer pacote MetaTrader5 + terminal disponível. Em CI/Linux costuma falhar —
-    use CSV ou `--synthetic` nesse caso.
+    Requer pacote MetaTrader5 + terminal aberto (Windows ou Wine).
+    A conexão é forçada com dry_run=True — este loader **nunca** envia ordens.
+    Em CI/Linux o pacote oficial normalmente não está disponível.
     """
     from mt5_ea.config import Settings, load_settings
-    from mt5_ea.connection import MT5Client
+    from mt5_ea.connection import MT5Client, MT5ConnectionError
+    from mt5_ea.timeframes import timeframe_label
 
     cfg: Settings = settings if settings is not None else load_settings()
-    cfg = cfg.with_overrides(symbol=symbol)
+    # Garante que nenhuma ordem possa ser enviada durante o fetch de histórico
+    cfg = cfg.with_overrides(symbol=symbol, dry_run=True)
 
-    with MT5Client(cfg) as client:
-        rows = client.get_rates(
-            symbol,
-            timeframe_minutes=timeframe_minutes,
-            count=bars,
+    try:
+        with MT5Client(cfg) as client:
+            rows = client.get_rates(
+                symbol,
+                timeframe_minutes=timeframe_minutes,
+                count=None if date_from or date_to else bars,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            # Spec do contrato do símbolo (informativo; backtest pode sobrescrever)
+            _ = client.ensure_symbol(symbol)
+    except MT5ConnectionError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise MT5ConnectionError(
+            f"Falha ao carregar histórico MT5 {symbol} "
+            f"{timeframe_label(timeframe_minutes)}: {exc}"
+        ) from exc
+
+    if not rows:
+        raise MT5ConnectionError(
+            f"Histórico vazio para {symbol} {timeframe_label(timeframe_minutes)}"
         )
 
     return [

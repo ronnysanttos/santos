@@ -155,7 +155,7 @@ mt5-ea --once -v
 
 ## Backtest offline
 
-O motor em `mt5_ea.backtest` replay OHLC com a **mesma** Dual EMA + ATR e o RiskManager do EA ao vivo (sizing, max posições, etc.). Não precisa de terminal MT5.
+O motor em `mt5_ea.backtest` replay OHLC com a **mesma** Dual EMA + ATR e o RiskManager do EA ao vivo (sizing, max posições, etc.). O backtest **nunca envia ordens** (inclusive ao usar `--mt5` só para baixar histórico).
 
 Modelagem:
 
@@ -163,22 +163,43 @@ Modelagem:
 2. Entrada/saída por sinal no **open da barra seguinte** (com spread)
 3. SL/TP checados no high/low das barras seguintes (se ambos na mesma barra, assume SL primeiro)
 
+### Dados sintéticos / CSV (funcionam em qualquer SO)
+
 ```bash
 # Demo com dados sintéticos (padrão)
 python -m mt5_ea.backtest --synthetic --bars 500
 
 # CSV local (colunas: time,open,high,low,close[,volume])
-python -m mt5_ea.backtest --csv tests/fixtures/ohlc_eurusd_m15.csv
-
-# Fixture de exemplo do repositório
 python -m mt5_ea.backtest --csv tests/fixtures/ohlc_eurusd_m15.csv --lots 0.10 --trades
 
 # Parâmetros de estratégia / sizing %
 python -m mt5_ea.backtest --synthetic --ema-fast 8 --ema-slow 21 --atr-sl 1.5 --atr-tp 2.5 --risk-percent 0.5
-
-# Opcional: histórico real do MT5 (Windows + .env)
-python -m mt5_ea.backtest --mt5 --symbol EURUSD --timeframe 15 --bars 1000
 ```
+
+### Histórico real do MetaTrader 5 (`--mt5`)
+
+Requisitos **obrigatórios**:
+
+1. **Windows** (ou Wine experimental) — o pacote PyPI `MetaTrader5` **não instala em Linux nativo**
+2. Terminal **MetaTrader 5 aberto** e logado na conta
+3. Arquivo `.env` com `MT5_LOGIN` / `MT5_PASSWORD` / `MT5_SERVER` (veja `.env.example`)
+4. Símbolo visível no Market Watch
+
+```bash
+# Últimas 5000 barras M15 (copy_rates_from_pos) — só leitura, sem ordens
+python -m mt5_ea.backtest --mt5 --symbol EURUSD --timeframe M15 --bars 5000 --trades
+
+# Range por data (copy_rates_range)
+python -m mt5_ea.backtest --mt5 --symbol EURUSD --timeframe H1 --from 2024-01-01 --to 2024-12-31
+
+# Salvar relatório JSON
+python -m mt5_ea.backtest --mt5 --symbol EURUSD --timeframe M15 --bars 5000 \
+  --output-json backtest_eurusd_m15.json
+```
+
+Timeframes aceitos: `M1`…`M30`, `H1`…`H12`, `D1`, `W1`, `MN1` (ou minutos: `15`, `60`).
+
+Se o terminal não estiver disponível, use `--csv` / `--synthetic`. Em ambientes Linux/CI o comando `--mt5` deve falhar com mensagem clara (pacote/terminal ausente).
 
 Métricas impressas: lucro líquido, win rate, max drawdown, profit factor, nº de trades e resumo da curva de equity.
 
@@ -194,10 +215,11 @@ src/mt5_ea/
   execution.py     # TradeDecision → dry-run / MT5
   ea.py            # loop do EA
   backtest/        # motor offline + CLI
-    data.py        # CSV / sintético / MT5 opcional
+    data.py        # CSV / sintético / MT5 copy_rates_*
     engine.py      # replay OHLC
     metrics.py     # lucro, DD, PF, equity curve
     __main__.py    # python -m mt5_ea.backtest
+  timeframes.py    # parse M15/H1/…
 tests/
   fixtures/        # OHLC de exemplo para CI
 ```

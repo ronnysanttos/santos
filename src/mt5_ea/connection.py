@@ -235,19 +235,48 @@ class MT5Client:
         *,
         timeframe_minutes: int | None = None,
         count: int | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
     ) -> list[dict[str, Any]]:
-        """Retorna as últimas N barras como lista de dicts legíveis."""
+        """
+        Retorna barras OHLC via MetaTrader5.copy_rates_*.
+
+        - Com `date_from`/`date_to`: usa `copy_rates_range`
+        - Caso contrário: `copy_rates_from_pos` com as últimas `count` barras
+        """
         self._require_connected()
         name = (symbol or self._settings.symbol).upper()
         minutes = timeframe_minutes or self._settings.timeframe_minutes
-        bars = count or self._settings.bars
         tf = self._minutes_to_timeframe(minutes)
 
-        rates = mt5.copy_rates_from_pos(name, tf, 0, bars)
+        if not mt5.symbol_select(name, True):
+            code, message = mt5.last_error()
+            raise MT5ConnectionError(
+                f"Falha ao selecionar símbolo {name}: ({code}) {message}"
+            )
+
+        if date_from is not None or date_to is not None:
+            start = date_from or (datetime.now() - timedelta(days=365))
+            end = date_to or datetime.now()
+            if end <= start:
+                raise ValueError("date_to deve ser posterior a date_from")
+            rates = mt5.copy_rates_range(name, tf, start, end)
+            api = "copy_rates_range"
+        else:
+            bars = count or self._settings.bars
+            if bars < 1:
+                raise ValueError("count de barras deve ser >= 1")
+            rates = mt5.copy_rates_from_pos(name, tf, 0, bars)
+            api = "copy_rates_from_pos"
+
         if rates is None:
             code, message = mt5.last_error()
             raise MT5ConnectionError(
-                f"Falha ao copiar rates de {name}: ({code}) {message}"
+                f"Falha em {api} para {name} TF={minutes}m: ({code}) {message}"
+            )
+        if len(rates) == 0:
+            raise MT5ConnectionError(
+                f"{api} retornou 0 barras para {name} TF={minutes}m"
             )
 
         result: list[dict[str, Any]] = []
