@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mt5-ea"
+version = "0.1.0"
+description = "Expert Advisor / bot em Python com conexão MetaTrader 5"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "MetaTrader5>=5.0.45",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+mt5-ea = "mt5_ea.ea:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
