@@ -108,6 +108,8 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
         format="%(asctime)s | %(levelname)-7s | %(message)s",
         datefmt="%H:%M:%S",
     )
+    if not args.verbose:
+        logging.getLogger("mt5_ea.risk").setLevel(logging.WARNING)
 
     bars, source, symbol, tf, settings = _resolve_bars(args)
 
