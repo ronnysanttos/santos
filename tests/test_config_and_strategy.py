@@ -1,29 +1,32 @@
-"""Testes leves que não dependem do terminal MetaTrader 5."""
+"""Testes de config e estratégia placeholder (sem terminal MT5)."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from mt5_ea.config import load_settings
-from mt5_ea.strategy import PlaceholderStrategy
 from mt5_ea.connection import TickSnapshot
-from datetime import datetime
+from mt5_ea.strategy import PlaceholderStrategy
 
 
-def test_load_settings_from_example(tmp_path: Path, monkeypatch) -> None:
+def test_load_settings_from_example(monkeypatch) -> None:
     example = Path(__file__).resolve().parents[1] / ".env.example"
     assert example.exists()
 
-    # Isola env do host
     for key in list(__import__("os").environ):
-        if key.startswith("MT5_"):
+        if key.startswith(("MT5_", "STRATEGY_", "RISK_")):
             monkeypatch.delenv(key, raising=False)
 
     settings = load_settings(example)
     assert settings.symbol == "EURUSD"
     assert settings.dry_run is True
-    assert settings.timeframe_minutes == 5
-    assert settings.bars == 20
+    assert settings.ema_fast == 12
+    assert settings.ema_slow == 26
+    assert settings.atr_period == 14
+    assert settings.risk_mode == "percent"
+    assert settings.max_positions == 1
+    assert settings.bars >= 60
 
 
 def test_placeholder_strategy_holds() -> None:
@@ -54,6 +57,6 @@ def test_placeholder_strategy_holds() -> None:
             "tick_volume": 2,
         },
     ]
-    signal = strat.on_tick(tick, bars)
+    signal = strat.evaluate(tick, bars)
     assert signal.action == "hold"
     assert "placeholder" in signal.reason

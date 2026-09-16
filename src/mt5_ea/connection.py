@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import TracebackType
 from typing import Any, Self
 
@@ -46,6 +46,9 @@ class SymbolSnapshot:
     trade_mode: int
     volume_min: float
     volume_max: float
+    volume_step: float
+    trade_tick_size: float
+    trade_tick_value: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +59,20 @@ class TickSnapshot:
     ask: float
     last: float
     volume: int
+
+
+@dataclass(frozen=True, slots=True)
+class PositionSnapshot:
+    ticket: int
+    symbol: str
+    side: str  # buy | sell
+    volume: float
+    price_open: float
+    sl: float
+    tp: float
+    profit: float
+    magic: int
+    comment: str
 
 
 class MT5Client:
@@ -174,6 +191,12 @@ class MT5Client:
                 f"Sem dados para o símbolo {name}: ({code}) {message}"
             )
 
+        tick_size = float(info.trade_tick_size) or float(info.point)
+        tick_value = float(info.trade_tick_value)
+        if tick_value <= 0:
+            # fallback conservador para brokers que reportam 0
+            tick_value = float(info.point)
+
         return SymbolSnapshot(
             name=name,
             bid=float(tick.bid),
@@ -183,6 +206,9 @@ class MT5Client:
             trade_mode=int(info.trade_mode),
             volume_min=float(info.volume_min),
             volume_max=float(info.volume_max),
+            volume_step=float(info.volume_step) or float(info.volume_min) or 0.01,
+            trade_tick_size=tick_size,
+            trade_tick_value=tick_value,
         )
 
     def get_tick(self, symbol: str | None = None) -> TickSnapshot:
@@ -238,12 +264,72 @@ class MT5Client:
             )
         return result
 
+    def get_positions(
+        self,
+        *,
+        symbol: str | None = None,
+        magic: int | None = None,
+    ) -> list[PositionSnapshot]:
+        self._require_connected()
+        name = (symbol or self._settings.symbol).upper()
+        positions = mt5.positions_get(symbol=name)
+        if positions is None:
+            return []
+
+        magic_filter = self._settings.magic if magic is None else magic
+        out: list[PositionSnapshot] = []
+        for pos in positions:
+            if magic_filter is not None and int(pos.magic) != int(magic_filter):
+                continue
+            side = "buy" if int(pos.type) == mt5.POSITION_TYPE_BUY else "sell"
+            out.append(
+                PositionSnapshot(
+                    ticket=int(pos.ticket),
+                    symbol=str(pos.symbol),
+                    side=side,
+                    volume=float(pos.volume),
+                    price_open=float(pos.price_open),
+                    sl=float(pos.sl),
+                    tp=float(pos.tp),
+                    profit=float(pos.profit),
+                    magic=int(pos.magic),
+                    comment=str(pos.comment),
+                )
+            )
+        return out
+
+    def get_daily_realized_pnl(self, *, magic: int | None = None) -> float:
+        """Soma profit+swap+commission dos deals de saída desde 00:00 local."""
+        self._require_connected()
+        magic_filter = self._settings.magic if magic is None else magic
+        now = datetime.now()
+        day_start = datetime(now.year, now.month, now.day)
+        deals = mt5.history_deals_get(day_start, now + timedelta(seconds=1))
+        if deals is None:
+            return 0.0
+
+        total = 0.0
+        for deal in deals:
+            if magic_filter is not None and int(deal.magic) != int(magic_filter):
+                continue
+            # DEAL_ENTRY_OUT=1, DEAL_ENTRY_INOUT=2 (constantes oficiais MT5)
+            entry = int(getattr(deal, "entry", -1))
+            entry_out = int(getattr(mt5, "DEAL_ENTRY_OUT", 1))
+            entry_inout = int(getattr(mt5, "DEAL_ENTRY_INOUT", 2))
+            if entry not in (entry_out, entry_inout):
+                continue
+            total += float(deal.profit) + float(deal.swap) + float(deal.commission)
+        return total
+
     def place_market_order(
         self,
         *,
         symbol: str,
         order_type: str,
         volume: float,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        magic: int | None = None,
         comment: str = "mt5_ea",
     ) -> dict[str, Any]:
         """
@@ -256,45 +342,64 @@ class MT5Client:
         if side not in {"buy", "sell"}:
             raise ValueError("order_type deve ser 'buy' ou 'sell'")
 
+        magic_id = self._settings.magic if magic is None else magic
+
         if self._settings.dry_run:
             logger.warning(
-                "[DRY-RUN] Ordem NÃO enviada: %s %.2f %s (%s)",
+                "[DRY-RUN] Ordem NÃO enviada: %s %.2f %s SL=%s TP=%s (%s)",
                 side.upper(),
                 volume,
                 symbol,
+                stop_loss,
+                take_profit,
                 comment,
             )
             return {
+                "status": "dry_run",
                 "dry_run": True,
                 "retcode": None,
                 "symbol": symbol,
                 "side": side,
                 "volume": volume,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "magic": magic_id,
                 "comment": comment,
             }
 
         tick = self.get_tick(symbol)
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            raise MT5ConnectionError(f"symbol_info indisponível para {symbol}")
+
         order_type_const = mt5.ORDER_TYPE_BUY if side == "buy" else mt5.ORDER_TYPE_SELL
         price = tick.ask if side == "buy" else tick.bid
+        digits = int(info.digits)
 
-        request = {
+        request: dict[str, Any] = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": symbol,
             "volume": float(volume),
             "type": order_type_const,
             "price": price,
             "deviation": 20,
-            "magic": 9327001,
+            "magic": int(magic_id),
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": self._filling_mode(info),
         }
+        if stop_loss is not None:
+            request["sl"] = round(float(stop_loss), digits)
+        if take_profit is not None:
+            request["tp"] = round(float(take_profit), digits)
+
         result = mt5.order_send(request)
         if result is None:
             code, message = mt5.last_error()
             raise MT5ConnectionError(f"order_send falhou: ({code}) {message}")
 
         payload = {
+            "status": "sent",
             "dry_run": False,
             "retcode": int(result.retcode),
             "deal": int(getattr(result, "deal", 0) or 0),
@@ -304,12 +409,99 @@ class MT5Client:
             "comment": str(getattr(result, "comment", comment) or comment),
             "symbol": symbol,
             "side": side,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "magic": magic_id,
         }
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             logger.error("Ordem rejeitada: %s", payload)
         else:
             logger.info("Ordem executada: %s", payload)
         return payload
+
+    def close_positions(
+        self,
+        *,
+        symbol: str,
+        side: str | None = None,
+        magic: int | None = None,
+    ) -> dict[str, Any]:
+        """Fecha posições do símbolo/magic (filtra por lado se informado)."""
+        self._require_connected()
+        positions = self.get_positions(symbol=symbol, magic=magic)
+        if side is not None:
+            side_norm = side.strip().lower()
+            positions = [p for p in positions if p.side == side_norm]
+
+        if not positions:
+            logger.info("Nenhuma posição para fechar (%s side=%s)", symbol, side)
+            return {"status": "noop", "closed": 0, "dry_run": self._settings.dry_run}
+
+        if self._settings.dry_run:
+            tickets = [p.ticket for p in positions]
+            logger.warning("[DRY-RUN] Fechamento NÃO enviado: tickets=%s", tickets)
+            return {
+                "status": "dry_run",
+                "dry_run": True,
+                "closed": 0,
+                "would_close": tickets,
+            }
+
+        closed = 0
+        results: list[dict[str, Any]] = []
+        for pos in positions:
+            close_side = "sell" if pos.side == "buy" else "buy"
+            tick = self.get_tick(symbol)
+            price = tick.bid if close_side == "sell" else tick.ask
+            info = mt5.symbol_info(symbol)
+            order_type = (
+                mt5.ORDER_TYPE_SELL if close_side == "sell" else mt5.ORDER_TYPE_BUY
+            )
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": float(pos.volume),
+                "type": order_type,
+                "position": int(pos.ticket),
+                "price": price,
+                "deviation": 20,
+                "magic": int(pos.magic),
+                "comment": "mt5_ea:exit",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": self._filling_mode(info) if info else mt5.ORDER_FILLING_IOC,
+            }
+            result = mt5.order_send(request)
+            if result is None:
+                code, message = mt5.last_error()
+                results.append({"ticket": pos.ticket, "error": f"({code}) {message}"})
+                continue
+            ok = int(result.retcode) == mt5.TRADE_RETCODE_DONE
+            if ok:
+                closed += 1
+            results.append(
+                {
+                    "ticket": pos.ticket,
+                    "retcode": int(result.retcode),
+                    "ok": ok,
+                }
+            )
+
+        return {
+            "status": "sent",
+            "dry_run": False,
+            "closed": closed,
+            "results": results,
+        }
+
+    @staticmethod
+    def _filling_mode(info: Any) -> int:
+        filling = int(getattr(info, "filling_mode", 0) or 0)
+        # Prefer IOC, depois FOK, depois RETURN
+        if filling & 2:  # SYMBOL_FILLING_IOC
+            return mt5.ORDER_FILLING_IOC
+        if filling & 1:  # SYMBOL_FILLING_FOK
+            return mt5.ORDER_FILLING_FOK
+        return mt5.ORDER_FILLING_RETURN
 
     @staticmethod
     def _minutes_to_timeframe(minutes: int) -> int:
