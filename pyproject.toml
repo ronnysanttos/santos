@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
+mt5 = ["MetaTrader5>=5.0.45"]
 
 [project.scripts]
 ia-financeira = "ia_financeira.cli:main"

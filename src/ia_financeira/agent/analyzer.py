@@ -6,6 +6,7 @@ from typing import Any
 
 from ia_financeira.config import Settings, settings
 from ia_financeira.llm.ollama import SYSTEM_PROMPT, OllamaClient, extract_json_object
+from ia_financeira.mt5.execution import OrderExecutor, build_order_intent
 from ia_financeira.risk.guardrails import GuardrailVerdict, RiskGuardrails
 from ia_financeira.tools.market_data import MarketDataProvider, MarketSnapshot
 from ia_financeira.tools.web_search import FinancialWebSearchTool, NewsItem
@@ -20,6 +21,7 @@ class AnalysisResult:
     news: list[NewsItem]
     market: MarketSnapshot
     guardrails: GuardrailVerdict
+    order: dict[str, Any]
     raw_llm: str
     context: str
     steps: list[str] = field(default_factory=list)
@@ -32,13 +34,14 @@ class AnalysisResult:
             "news": [n.to_dict() for n in self.news],
             "market": self.market.to_dict(),
             "guardrails": self.guardrails.to_dict(),
-            "dry_run": True,
+            "order": self.order,
+            "dry_run": self.decision.get("dry_run", True),
             "steps": self.steps,
         }
 
 
 class FinancialAnalyzer:
-    """Vertical slice ReAct: web → market stub → LLM → guardrails."""
+    """ReAct slice: web → MT5/stub indicators → LLM → guardrails → dry-run order."""
 
     def __init__(self, cfg: Settings | None = None) -> None:
         self.cfg = cfg or settings
@@ -46,6 +49,7 @@ class FinancialAnalyzer:
         self.market = MarketDataProvider(self.cfg)
         self.llm = OllamaClient(self.cfg)
         self.risk = RiskGuardrails(self.cfg)
+        self.executor = OrderExecutor(self.cfg)
 
     def analyze(self, ticker: str) -> AnalysisResult:
         steps: list[str] = []
@@ -56,7 +60,10 @@ class FinancialAnalyzer:
         steps.append(f"2. Busca web: {len(news)} notícia(s)")
 
         snap = self.market.snapshot(symbol)
-        steps.append(f"3. Snapshot de mercado ({snap.mode})")
+        steps.append(
+            f"3. Snapshot de mercado ({snap.mode}) "
+            f"RSI={snap.rsi_14} MA200={snap.ma_200} ATR={snap.atr_14}"
+        )
 
         news_block = json.dumps([n.to_dict() for n in news], ensure_ascii=False, indent=2)
         context = (
@@ -68,7 +75,7 @@ class FinancialAnalyzer:
             "Decisão (COMPRA/VENDA/AGUARDAR) em JSON com "
             "acao, confianca, sentimento, justificativa:"
         )
-        steps.append("4. Consultar LLM local (Ollama)")
+        steps.append("4. Consultar LLM local (Ollama / qwen2.5:7b)")
         llm_result = self.llm.generate(prompt, system=SYSTEM_PROMPT)
         steps.append(f"5. Resposta LLM via {llm_result.source} ({llm_result.model})")
 
@@ -83,7 +90,6 @@ class FinancialAnalyzer:
             }
             steps.append("6. Parse JSON falhou — forçando AGUARDAR")
 
-        # Normalize keys
         decision["acao"] = str(decision.get("acao", "AGUARDAR")).upper()
         try:
             decision["confianca"] = int(decision.get("confianca", 0))
@@ -95,16 +101,30 @@ class FinancialAnalyzer:
         verdict = self.risk.evaluate(decision)
         steps.append(
             "6. Guardrails: "
-            + ("ordem permitida (dry-run)" if verdict.allowed else "bloqueado / aguardar")
+            + ("ordem elegível" if verdict.allowed else "bloqueado / aguardar")
         )
         if verdict.reasons:
             steps.append("   motivos: " + "; ".join(verdict.reasons))
 
-        # Effective decision after guardrails
+        intent = None
+        if verdict.allowed:
+            intent = build_order_intent(
+                action=verdict.action,
+                snapshot=snap,
+                confidence=verdict.confidence,
+                cfg=self.cfg,
+            )
+        order_result = self.executor.execute(intent)
+        steps.append(
+            f"7. Execução: {order_result.get('status')} "
+            f"(dry_run={self.cfg.mt5_dry_run}, "
+            f"allow_demo={self.cfg.mt5_allow_demo_orders})"
+        )
+
         effective = dict(decision)
         effective["acao"] = verdict.action
         effective["ordem_permitida"] = verdict.allowed
-        effective["dry_run"] = self.cfg.mt5_dry_run
+        effective["dry_run"] = not self.cfg.can_send_mt5_orders()
 
         return AnalysisResult(
             ticker=symbol,
@@ -114,6 +134,7 @@ class FinancialAnalyzer:
             news=news,
             market=snap,
             guardrails=verdict,
+            order=order_result,
             raw_llm=llm_result.text,
             context=context,
             steps=steps,
