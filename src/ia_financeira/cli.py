@@ -32,12 +32,18 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--pretty", action="store_true")
 
     sub.add_parser("health", help="Checa Ollama, busca e MT5")
+    sub.add_parser("gui", help="Abre a interface gráfica (duplo clique / atalho)")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "gui":
+        from ia_financeira.gui import main as gui_main
+
+        return gui_main()
 
     if args.command == "health":
         client = OllamaClient()

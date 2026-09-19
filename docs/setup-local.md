@@ -4,6 +4,35 @@ Guia curto para Rony Santos. Decisões travadas: **Ollama `qwen2.5:7b`**, busca 
 
 ---
 
+## Onde roda o programa
+
+| Forma | Caminho / comando |
+|-------|-------------------|
+| **CLI (entrada principal)** | `python -m ia_financeira` |
+| Health | `python -m ia_financeira health` |
+| Busca | `python -m ia_financeira search PETR4` |
+| Análise | `python -m ia_financeira analyze PETR4 --pretty` |
+| **GUI (duplo clique)** | `python -m ia_financeira.gui` ou `python -m ia_financeira gui` |
+| **Launcher Windows** | [`scripts/launch_ia_financeira.bat`](../../scripts/launch_ia_financeira.bat) |
+| **Ícone do app** | [`assets/ia_financeira.ico`](../../assets/ia_financeira.ico) (cópia em `src/ia_financeira/assets/`) |
+| **Atalho na Área de Trabalho** | rode `scripts/install_desktop_shortcut.ps1` uma vez |
+
+O `.bat` usa o `.venv` do repo (se existir), define `PYTHONPATH=src` e abre a janela gráfica.
+
+---
+
+## Ícone na Área de Trabalho (um comando)
+
+No PowerShell, na pasta do repositório `santos`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_desktop_shortcut.ps1
+```
+
+Isso cria **`IA Financeira.lnk`** no Desktop, apontando para `scripts\launch_ia_financeira.bat` com o ícone `assets\ia_financeira.ico`. Depois é só dar duplo clique no atalho.
+
+---
+
 ## 1. Pré-requisitos
 
 | Item | Detalhe |
@@ -19,12 +48,11 @@ Guia curto para Rony Santos. Decisões travadas: **Ollama `qwen2.5:7b`**, busca 
 ## 2. Ollama (`qwen2.5:7b`)
 
 ```powershell
-# Após instalar o Ollama
 ollama pull qwen2.5:7b
 ollama run qwen2.5:7b
 ```
 
-Deixe o serviço Ollama rodando. API esperada: `http://localhost:11434`.
+API esperada: `http://localhost:11434`.
 
 ---
 
@@ -39,41 +67,40 @@ pip install MetaTrader5
 copy .env.example .env
 ```
 
-Edite `.env`:
+Edite `.env` (conta **demo**): `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`. Mantenha `MT5_DRY_RUN=true` e `MT5_ALLOW_DEMO_ORDERS=false`.
 
-- `OLLAMA_MODEL=qwen2.5:7b` (já default)
-- `WEB_SEARCH_BACKEND=duckduckgo` (já default)
-- `MARKET_DATA_MODE=auto` (tenta MT5; se falhar, usa stub)
-- `MT5_DRY_RUN=true`
-- `MT5_ALLOW_DEMO_ORDERS=false`
-- Preencha `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER` (conta **demo**)
-- Opcional: `MT5_PATH=C:\Program Files\MetaTrader 5\terminal64.exe`
+Instale o atalho:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_desktop_shortcut.ps1
+```
 
 ---
 
 ## 4. MetaTrader 5 (demo)
 
-1. Abra o terminal MT5 e faça login na **conta demonstração**.
-2. Confirme o símbolo no Market Watch (ex.: `PETR4`, `WIN$`, `EURUSD` — use o nome exato do broker).
-3. Em **Ferramentas → Opções → Expert Advisors**, permita trading automatizado **só** quando for testar envio real (ainda não necessário em dry-run).
-4. Mantenha o terminal aberto enquanto roda o agente.
+1. Abra o MT5 e faça login na **conta demonstração**.
+2. Confirme o símbolo no Market Watch (nome exato do broker).
+3. Mantenha o terminal aberto enquanto usa o agente.
+4. Trading automatizado só é necessário quando for testar envio real (não em dry-run).
 
 ---
 
 ## 5. Comandos do dia a dia
 
 ```powershell
-# Saúde: Ollama + MT5
+# Duplo clique / GUI
+.\scripts\launch_ia_financeira.bat
+# ou
+python -m ia_financeira gui
+
+# CLI
 python -m ia_financeira health
-
-# Só notícias (DuckDuckGo)
 python -m ia_financeira search PETR4 --pretty
-
-# Fluxo completo: web + indicadores + LLM + guardrails + dry-run order
 python -m ia_financeira analyze PETR4 --pretty
 ```
 
-Em dry-run, a saída JSON inclui `order.status = "dry_run"` e o log da ordem **pretendida** (lado, volume, SL/TP) — nada é enviado ao MT5.
+Em dry-run, o JSON inclui `order.status = "dry_run"` — nada é enviado ao MT5.
 
 ---
 
@@ -82,18 +109,16 @@ Em dry-run, a saída JSON inclui `order.status = "dry_run"` e o log da ordem **p
 | Modo | `.env` | Comportamento |
 |------|--------|----------------|
 | **Dry-run (default)** | `MT5_DRY_RUN=true` | Só registra intenção de ordem |
-| **Demo send** | `MT5_DRY_RUN=false` **e** `MT5_ALLOW_DEMO_ORDERS=true` | Envia ordem a mercado na conta logada |
+| **Demo send** | `MT5_DRY_RUN=false` **e** `MT5_ALLOW_DEMO_ORDERS=true` | Envia ordem a mercado |
 | Bloqueado | Qualquer outro combo | Continua dry-run |
 
-Guardrails sempre ativos: confiança ≥ 70%, stop diário R$ 300, pausa em alto impacto.
-
-**Nunca** use conta live nesta fase. Só demo, e só após revisar vários dry-runs.
+Guardrails: confiança ≥ 70%, stop diário R$ 300, pausa alto impacto. **Nunca** use conta live nesta fase.
 
 ---
 
 ## 7. Linux / CI
 
-Sem terminal MT5: o agente usa stub de indicadores e dry-run. Testes:
+Sem terminal MT5: stub + dry-run. A GUI precisa de display (`tkinter`). Testes:
 
 ```bash
 pip install -r requirements.txt
@@ -108,6 +133,6 @@ pytest -q
 |---------|------|
 | `ollama_available: false` | Subir Ollama; `ollama pull qwen2.5:7b` |
 | `MetaTrader5 package unavailable` | `pip install MetaTrader5` no Windows |
-| Falha ao conectar MT5 | Terminal aberto + login demo + credenciais no `.env` |
-| Símbolo não encontrado | Nome exato do broker no Market Watch |
-| Ordem não sai | Confirme os **dois** flags de demo; confira `guardrails.allowed` |
+| Atalho não abre | Confirme `.venv` criado e `pip install -r requirements.txt` |
+| GUI não sobe | `python -m ia_financeira gui` no terminal para ver o erro |
+| Símbolo não encontrado | Nome exato no Market Watch |
