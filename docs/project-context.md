@@ -36,11 +36,16 @@ Documento durável de contexto. Fonte: [plano-projeto-ia-financeira.pdf](./plano
 - Opcional Windows: `MetaTrader5`
 - Pacote: `src/ia_financeira` (`mt5/`, `agent/`, `tools/`, `risk/`, `llm/`)
 
-## Comandos
+## Onde roda
+
+- CLI: `python -m ia_financeira`
+- GUI: `python -m ia_financeira.gui` · launcher `scripts/launch_ia_financeira.bat`
+- Ícone/atalho: `assets/ia_financeira.ico` · `scripts/install_desktop_shortcut.ps1`
 
 ```powershell
 python -m ia_financeira health
 python -m ia_financeira analyze PETR4 --pretty
+powershell -ExecutionPolicy Bypass -File .\scripts\install_desktop_shortcut.ps1
 pytest -q
 ```
 
